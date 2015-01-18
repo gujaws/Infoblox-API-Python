@@ -23,6 +23,9 @@ class InfobloxNotFoundException(Exception):
 class InfobloxNoIPavailableException(Exception):
     pass
 
+class InfobloxNoNetworkAvailableException(Exception):
+    pass
+
 class InfobloxGeneralException(Exception):
     pass
 
@@ -35,6 +38,9 @@ class Infoblox(object):
         delete_network
         create_networkcontainer
         delete_networkcontainer
+        get_next_available_network
+        get_networkcontainer
+        get_networkcontainer_by_extattrs
         create_host_record
         delete_host_record
         add_host_alias
@@ -104,6 +110,44 @@ class Infoblox(object):
                             r.raise_for_status()
                 else:
                     raise InfobloxNotFoundException("No requested network found: " + network)
+            else:
+                if 'text' in r_json:
+                    raise InfobloxGeneralException(r_json['text'])
+                else:
+                    r.raise_for_status()
+        except ValueError:
+            raise Exception(r)
+        except Exception:
+            raise
+
+    def get_next_available_network(self, network, cidr):
+        """ Implements IBA next_available_ip REST API call
+        Returns IP v4 address
+        :param network: networkcontainer in CIDR format
+        """
+        rest_url = 'https://' + self.iba_host + '/wapi/v' + self.iba_wapi_version + '/networkcontainer?network=' + network + '&network_view=' + self.iba_network_view
+        try:
+            r = requests.get(url=rest_url, auth=(self.iba_user, self.iba_password), verify=self.iba_verify_ssl)
+            r_json = r.json()
+            if r.status_code == 200:
+                if len(r_json) > 0:
+                    net_ref = r_json[0]['_ref']
+                    rest_url = 'https://' + self.iba_host + '/wapi/v' + self.iba_wapi_version + '/' + net_ref + '?_function=next_available_network&num=1&cidr=' + cidr
+                    r = requests.post(url=rest_url, auth=(self.iba_user, self.iba_password), verify=self.iba_verify_ssl)
+                    r_json = r.json()
+                    if r.status_code == 200:
+                        ip_v4 = r_json['networks'][0]
+                        return ip_v4
+                    else:
+                        if 'text' in r_json:
+                            if 'code' in r_json and r_json['code'] == 'Client.Ibap.Data':
+                                raise InfobloxNoNetworkAvailableException(r_json['text'])
+                            else:
+                                raise InfobloxGeneralException(r_json['text'])
+                        else:
+                            r.raise_for_status()
+                else:
+                    raise InfobloxNotFoundException("No requested networkcontainer found: " + network)
             else:
                 if 'text' in r_json:
                     raise InfobloxGeneralException(r_json['text'])
@@ -811,6 +855,87 @@ class Infoblox(object):
                         raise InfobloxGeneralException("No network reference received in IBA reply for network: " + network)
                 else:
                     raise InfobloxNotFoundException("No network found: " + network)
+            else:
+                if 'text' in r_json:
+                    raise InfobloxGeneralException(r_json['text'])
+                else:
+                    r.raise_for_status()
+        except ValueError:
+            raise Exception(r)
+        except Exception:
+            raise
+
+    def get_networkcontainer(self, network, fields=None):
+        """ Implements IBA REST API call to retrieve networkcontainer object fields
+        Returns hash table of fields with field name as a hash key
+        :param network: network in CIDR format
+        :param fields: comma-separated list of field names
+                        (optional, returns network in CIDR format and netmask if not specified)
+        """
+        rest_url = 'https://' + self.iba_host + '/wapi/v' + self.iba_wapi_version + '/networkcontainer'
+
+        payload = {
+                'network': network,
+                'network_view': self.iba_network_view,
+                }
+
+        if fields:
+            payload['_return_fields'] = ','.join(fields)
+
+        try:
+            r = requests.get(url=rest_url, auth=(self.iba_user, self.iba_password), verify=self.iba_verify_ssl, data=payload)
+            r_json = r.json()
+            if r.status_code == 200:
+                if len(r_json) > 0:
+                    return r_json[0]
+                else:
+                    raise InfobloxNotFoundException("No requested network found: " + network)
+            else:
+                if 'text' in r_json:
+                    raise InfobloxNotFoundException(r_json['text'])
+                else:
+                    r.raise_for_status()
+        except ValueError:
+            raise Exception(r)
+        except Exception:
+            raise
+
+    def get_networkcontainer_by_extattrs(self, attributes,fields=None):
+        """ Implements IBA REST API call to find a networkcontainer by it's extensible attributes
+        Returns array of networkcontainers in CIDR format
+        :param attributes: comma-separated list of attrubutes name/value pairs in the format:
+                attr_name=attr_value - exact match for attribute value
+                attr_name:=attr_value - case insensitive match for attribute value
+                attr_name~=regular_expression - match attribute value by regular expression
+                attr_name>=attr_value - search by number greater than value
+                attr_name<=attr_value - search by number less than value
+                attr_name!=attr_value - search by number not equal of value
+        """
+        rest_url = 'https://' + self.iba_host + '/wapi/v' + self.iba_wapi_version + '/networkcontainer'
+
+        payload = {
+                'network_view': self.iba_network_view
+                }
+
+        if fields:
+            payload['_return_fields'] = ','.join(fields)
+
+        if attributes:
+            for attribute in attributes.split(","):
+                temp = attribute.split('=')
+                payload[temp[0]] = temp[1]
+
+        networks = []
+        try:
+            r = requests.get(url=rest_url, auth=(self.iba_user, self.iba_password), verify=self.iba_verify_ssl, data=payload)
+            r_json = r.json()
+            if r.status_code == 200:
+                if len(r_json) > 0:
+                    for network in r_json:
+                        networks.append(network)
+                    return networks
+                else:
+                    raise InfobloxNotFoundException("No networkcontainers found for extensible attributes: " + attributes)
             else:
                 if 'text' in r_json:
                     raise InfobloxGeneralException(r_json['text'])
